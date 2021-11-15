@@ -1,0 +1,9 @@
+out/*
+**.pyc
+orch.egg-info/**
+build/**
+dist/**
+**/.ipynb_checkpoints/**
+**.sqlite
+**/tmp
+**/*.log

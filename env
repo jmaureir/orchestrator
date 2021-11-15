@@ -1,0 +1,4 @@
+export PYTHONPATH=`pwd`/lib/python:$PYTHONPATH
+
+echo "Python search path: $PYTHONPATH"
+
