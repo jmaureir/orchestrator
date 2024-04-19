@@ -1,4 +1,3 @@
-
 import sqlalchemy as sal
 from sqlalchemy import create_engine, and_
 from sqlalchemy.sql import func

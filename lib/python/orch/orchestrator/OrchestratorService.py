@@ -8,38 +8,57 @@ import time
 import dill
 import base64
 import ast
+import json
 from datetime import datetime
 
 from ..base import AbstractApiService
 from ..loggers import BasicLogger
 from ..scheduler import ScheduledEvent
 from ..exceptions import MultipleActivePipelineRegistered, NoActivePipelineRegistered,PipelineExecutionError
+from ..exceptions import NoSuchKeyInDictionary, NoSuchDictionary
 from .OrchestratorManager import OrchestratorManager
 from .OrchestratorAccess import OrchestratorAccess
 
-from bupacl.credentialmanager.exceptions import *
+from credentialmanager.exceptions import *
 
 class OrchestratorService(AbstractApiService):
-    def __init__(self,address="127.0.0.1", port=8020, db_conn_str="sqlite:///orchestrator.sqlite"):
+    def __init__(self,address="127.0.0.1", port=8020, db_conn_str="sqlite:///orchestrator.sqlite", smtp_crd=None):
         super().__init__("OrchestratorService", bind_addr=address, bind_port=port)
+        self.smtp_crd = smtp_crd
         self.addRule("/","status",self.status)
         self.addRule("/stop","stop",self.stop)
         self.addRule("/register","register",self.register, methods=["POST"])
         self.addRule("/get","get",self.get, methods=["POST"])
         self.addRule("/activate","activate",self.activate, methods=["POST"])
         self.addRule("/deactivate","deactivate",self.deactivate, methods=["POST"])
-        self.addRule("/execute","execute",self.execute, methods=["POST"])        
+
+        # execution
+        self.addRule("/execute","execute",self.execute, methods=["POST"])
+        self.addRule("/execution/running","running_executions",self.get_running_executions, methods=["GET"])
+        self.addRule("/execution/getby","get_executions_by",self.get_executions_by, methods=["POST"])
         self.addRule("/execution/<exec_id>/status","execution_status",self.execution_status, methods=["GET"])
+        self.addRule("/execution/<exec_id>/output","execution_output",self.get_execution_output, methods=["GET"])
         self.addRule("/execution/<exec_id>/get","get_execution",self.get_execution, methods=["GET"])
+        self.addRule("/execution/<exec_id>/cancel","cancel_execution",self.cancel_execution, methods=["GET"])
         self.addRule("/execution/<pipeline_name>/list","get_execution_list",self.get_execution_list, methods=["GET"])
         self.addRule("/execution/<pipeline_name>/last","get_last_execution",self.get_last_execution, methods=["GET"])
         self.addRule("/execution/<pipeline_name>/scheduled","get_scheduled_executions",self.get_scheduled_executions, methods=["GET"])
+
+        # scheduling
         self.addRule("/schedule/<scheduled_execution_id>/cancel","cancel_scheduled_execution",self.cancel_scheduled_execution, methods=["GET"])
         self.addRule("/schedule/<scheduled_execution_id>/get","get_scheduled_execution_by_id",self.get_scheduled_execution_by_id, methods=["GET"])
         self.addRule("/scheduleAt","scheduleAt",self.scheduleAt, methods=["POST"])
-        self.addRule("/rpn/<label>/notify","create_notification",self.create_notification, methods=["GET"])
+        
+        # remote procedure notiications
+        
+        self.addRule("/rpn/<label>/notify","create_notification",self.create_notification, methods=["GET","POST"])
         self.addRule("/rpn/<label>/last","get_last_notification",self.get_last_notification, methods=["GET"])
         self.addRule("/rpn/<label>/list","get_notification_list",self.get_notification_list, methods=["GET"])
+        self.addRule("/rpn/<label>/subscribe","subscribe_notification_pipeline",self.subscribe_notification_pipeline, methods=["POST"])
+        self.addRule("/rpn/<label>/unsubscribe","unsubscribe_notification_pipeline",self.unsubscribe_notification_pipeline,methods=["POST"])
+        self.addRule("/rpn/<label>/subscribed","get_subscribed_pipelines",self.get_subscribed_pipelines, methods=["GET"])
+        
+        # credential manager
         self.addRule("/putKey","put_key",self.put_key, methods=["POST"])
         self.addRule("/putCredential","put_credential",self.put_credential, methods=["POST"])
         self.addRule("/putToken","put_token",self.put_token, methods=["POST"])
@@ -66,7 +85,12 @@ class OrchestratorService(AbstractApiService):
         self.addRule("/token/<label>/<whom>/tokenExpirationDate","get_token_expiration_date",self.get_token_expiration_date, methods=["GET"])
         self.addRule("/token/<label>/<whom>/tokenExpiration","token_expiration",self.token_expiration, methods=["GET"])
         
-        self.manager = OrchestratorManager(db_conn_str=db_conn_str)
+        # Persistent Dict
+        self.addRule("/pd/<dict_name>/put","pd_put",self.put_persistent_dict, methods=["POST"])
+        self.addRule("/pd/<dict_name>/get/<key>","pd_get",self.get_persistent_dict, methods=["GET"])
+        self.addRule("/pd/<dict_name>/get/<key>/asJson","pd_get_as_json",self.get_persistent_dict_as_json, methods=["GET"])
+
+        self.manager = OrchestratorManager(db_conn_str=db_conn_str, smtp_crd=self.smtp_crd)
         
         self.setLogger(BasicLogger("OrchestratorService"))
         
@@ -313,6 +337,13 @@ class OrchestratorService(AbstractApiService):
                 "code"         : 202,
                 "status"       : "executor active",
                 "state"        : executor.state,
+                "start_ts"     : executor.start_ts,
+                "end_ts"       : executor.end_ts,
+                "exec_time"    : executor.exec_time,
+                "state"        : executor.state,
+                "return_value" : executor.pipeline_ret,
+                "version"      : executor.version,
+                "creation"     : executor.creation,
                 "execution_id" : exec_id,
                 "ts"           : now.isoformat()
             }
@@ -343,6 +374,63 @@ class OrchestratorService(AbstractApiService):
             return {
                 "code"         : 310,
                 "status"       : "Executor does not exists",
+                "executor"     : "",
+                "execution_id" : exec_id,
+                "ts"           : now.isoformat()
+            }
+ 
+    def get_execution_output(self, exec_id):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        print("%s : getting output for execution id %s" % (now, exec_id))
+        
+        executor = self.manager.getExecution(exec_id)
+        
+        if executor is not None:
+            return {
+                "code"         : 202,
+                "status"       : "ok",
+                "output"       : executor.getOutput(),
+                "error"        : executor.getErrors(),
+                "execution_id" : exec_id,
+                "ts"           : now.isoformat()
+            }
+        else:
+            return {
+                "code"         : 310,
+                "status"       : "Executor does not exists",
+                "executor"     : "",
+                "execution_id" : exec_id,
+                "ts"           : now.isoformat()
+            }
+   
+    def cancel_execution(self, exec_id):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        print("%s : cancelling execution id %s" % (now, exec_id))
+        
+        executor = self.manager.getExecution(exec_id)
+        if executor is not None:
+            if self.manager.cancelExecution(exec_id):
+                executor = self.manager.getExecution(exec_id)
+                return {
+                    "code"         : 202,
+                    "status"       : "ok",
+                    "executor"     : executor.serialize(),
+                    "execution_id" : exec_id,
+                    "ts"           : now.isoformat()
+                }
+            else:
+                executor = self.manager.getExecution(exec_id)
+                return {
+                    "code"         : 311,
+                    "status"       : "Executor could not be cancelled",
+                    "executor"     : executor.serialize(),
+                    "execution_id" : exec_id,
+                    "ts"           : now.isoformat()
+                }
+        else:
+            return {
+                "code"         : 310,
+                "status"       : "No such Executor",
                 "executor"     : "",
                 "execution_id" : exec_id,
                 "ts"           : now.isoformat()
@@ -493,21 +581,38 @@ class OrchestratorService(AbstractApiService):
         
         executor = self.manager.getLastExecution(pipeline_name)
         
-        if executor is not None:
+        try:
+            if executor is not None:
+                if "asJson" in request.args:
+                    return {
+                        "code"         : 202,
+                        "status"       : "ok",
+                        "executor"     : executor.asJson(),
+                        "ts"           : now.isoformat()
+                    }
+
+                else:
+                    return {
+                        "code"         : 202,
+                        "status"       : "ok",
+                        "executor"     : executor.serialize(),
+                        "ts"           : now.isoformat()
+                    }
+            else:
+                return {
+                    "code"         : 310,
+                    "status"       : "Executor does not exists",
+                    "executor"     : None,
+                    "ts"           : now.isoformat()
+                }
+        except Exception as e:
             return {
-                "code"         : 202,
-                "status"       : "ok",
-                "executor"     : executor.serialize(),
+                "code"         : 501,
+                "status"       : "Exception when recovering Executor",
+                "exception"    : str(e),
                 "ts"           : now.isoformat()
             }
-        else:
-            return {
-                "code"         : 310,
-                "status"       : "Executor does not exists",
-                "executor"     : None,
-                "ts"           : now.isoformat()
-            }
-    
+
     def get_execution_list(self,pipeline_name):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         
@@ -543,6 +648,79 @@ class OrchestratorService(AbstractApiService):
             "ts"           : now.isoformat()
         }
 
+    def get_running_executions(self):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        
+        self.logger.info("getting running executions")
+            
+        executions = self.manager.getRunningExecutions()
+            
+        if len(executions)>0:
+
+            if "asJson" in request.args:
+                executors_list_json = [ ex.asJson() for ex in executions ]
+            else:
+                executors_list_json = [ ex.serialize() for ex in executions ]
+
+            return {
+                "code"         : 204,
+                "status"       : "ok",
+                "executions"   : executors_list_json,
+                "ts"           : now.isoformat()
+            }
+
+        else:
+            return {
+                "code"         : 401,
+                "status"       : "No executions running",
+                "executions"   : [],
+                "ts"           : now.isoformat()
+            }
+
+    def get_executions_by(self):
+        
+        args = request.json
+        if "where" in args:
+            where = args["where"]
+            now = datetime.now(timezone.utc).astimezone(get_localzone())
+
+            self.logger.info("getting executions by %s" % where)
+
+            executions = self.manager.getExecutionsBy(where)
+
+            if len(executions)>0:
+                executors_list_json = []
+                if "asJson" in request.args:
+                    try:
+                        executors_list_json = [ ex.asJson() for ex in executions ]
+                    except Exception as e:
+                        print(e)
+                else:
+                    executors_list_json = [ ex.serialize() for ex in executions ]
+
+                return {
+                    "code"         : 204,
+                    "status"       : "ok",
+                    "where"        : where,
+                    "executions"   : executors_list_json,
+                    "ts"           : now.isoformat()
+                }
+            else:
+                return {
+                    "code"         : 401,
+                    "status"       : "No executions found",
+                    "where"        : where,
+                    "executions"   : [],
+                    "ts"           : now.isoformat()
+                }
+        else:
+            return {
+                "code"         : 501,
+                "status"       : "no where string given",
+                "executions"   : [],
+                "ts"           : now.isoformat()
+            }
+    
     def get_scheduled_executions(self,pipeline_name):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         
@@ -649,27 +827,40 @@ class OrchestratorService(AbstractApiService):
                 }
 
     def create_notification(self,label):
-        
-        data = request.args
-        now = datetime.now(timezone.utc).astimezone(get_localzone())
-        notification = self.manager.createNotification(label,data=data)
-        
-        if notification is not None:
-            notif_json = notification.serialize()
-            return {
-                "code"         : 204,
-                "status"       : "ok",
-                "notification" : notif_json,
-                "ts"           : now.isoformat()
-            }
+        data = None
+        if request.method == "POST":
+            data = request.json
         else:
+            data = request.args
+
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        try:
+            notification = self.manager.createNotification(label,data=data)
+
+            if notification is not None:
+                notif_json = notification.serialize()
+                return {
+                    "code"         : 204,
+                    "status"       : "ok",
+                    "notification" : notif_json,
+                    "ts"           : now.isoformat()
+                }
+            else:
+                return {
+                    "code"          : 311,
+                    "status"        : "notification not created",
+                    "notification"  : None,
+                    "ts"            : now.isoformat()
+                }
+        except Exception as e:
+            print(e)
             return {
-                "code"          : 311,
-                "status"        : "notification not created",
-                "notification"  : None,
+                "code"          : 502,
+                "status"        : "Exception raised when creating notification",
+                "exception"     : e,
                 "ts"            : now.isoformat()
             }
-        
+      
     def get_last_notification(self,label):
         now = datetime.now(timezone.utc).astimezone(get_localzone())        
         last_notification = self.manager.getLastNotification(label)
@@ -712,6 +903,57 @@ class OrchestratorService(AbstractApiService):
                 "ts"                : now.isoformat()
             }
     
+    def subscribe_notification_pipeline(self, label):
+        data = request.get_json()
+
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+
+        try:
+            pipeline_name = data["pipeline_name"]
+            subscriber = self.manager.subscribePipelineNotification(label,pipeline_name)
+
+            if subscriber is not None:
+                subscriber_json = subscriber.serialize()
+                return {
+                    "code"         : 204,
+                    "status"       : "ok",
+                    "subscription" : subscriber_json,
+                    "ts"           : now.isoformat()
+                }
+        except Exception as e:
+            print(e)
+            return {
+                "code"          : 501,
+                "status"        : "error subscribing pipeline",
+                "exception"     : base64.b64encode(dill.dumps(e)),
+                "ts"            : now.isoformat()
+            }
+
+    def unsubscribe_notification_pipeline(self, label):
+        data = request.get_json()
+
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+
+        try:
+            pipeline_name = data["pipeline_name"]
+            if self.manager.unsubscribePipelineNotification(label,pipeline_name):
+                return {
+                    "code"         : 204,
+                    "status"       : "ok",
+                    "ts"           : now.isoformat()
+                }
+        except Exception as e:
+            print(e)
+            return {
+                "code"          : 501,
+                "status"        : "error unsubscribing pipeline",
+                "exception"     : base64.b64encode(dill.dumps(e)),
+                "ts"            : now.isoformat()
+            }
+
+    def get_subscribed_pipelines(self, label):
+        pass
+        
     def stop(self):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         self.manager.stop()
@@ -802,7 +1044,6 @@ class OrchestratorService(AbstractApiService):
                 "error"  : "%s" % e,
                 "ts"     : now.isoformat()
             }
-            
             
     def put_credential(self):
         json_input = request.json
@@ -970,7 +1211,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
             
-    
     def get_credential_list(self, active):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         try:
@@ -1002,7 +1242,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }    
         
-                
     def credential_expiration(self, label):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         try:
@@ -1035,7 +1274,7 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
                 
-    def get_credential_expiration_date(self, label):       
+    def get_credential_expiration_date(self, label):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         try:
             date = self.manager.getCredentialExpirationDate(label)
@@ -1217,7 +1456,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
         
-        
     def assign_token(self):
         json_input = request.json
         now = datetime.now(timezone.utc).astimezone(get_localzone())        
@@ -1250,7 +1488,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
 
-
     def get_assigned_token(self, label, whom):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         try:
@@ -1276,7 +1513,6 @@ class OrchestratorService(AbstractApiService):
                 "error"  : "%s" % e,
                 "ts"     : now.isoformat()
             }
-
 
     def sign_token(self):
         json_input = request.json
@@ -1322,7 +1558,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
 
-
     def get_token_list(self, active):
         active = ast.literal_eval(active)
         status = 'inactive'
@@ -1355,7 +1590,6 @@ class OrchestratorService(AbstractApiService):
                 "ts"     : now.isoformat()
             }
 
-
     def get_token_expiration_date(self, label, whom=None):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
         try:
@@ -1381,7 +1615,6 @@ class OrchestratorService(AbstractApiService):
                 "error"  : "%s" % e,
                 "ts"     : now.isoformat()
             }
-
 
     def token_expiration(self, label, whom=None):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
@@ -1415,7 +1648,6 @@ class OrchestratorService(AbstractApiService):
                 "error"  : "%s" % e,
                 "ts"     : now.isoformat()
             }
-
         
     def get_register_credential(self, label, token=None, whom=None):
         now = datetime.now(timezone.utc).astimezone(get_localzone())
@@ -1434,6 +1666,115 @@ class OrchestratorService(AbstractApiService):
             return {
                 "code"   : 313,
                 "status" : "Could not retrieve credential",
+                "error"  : "%s" % e,
+                "ts"     : now.isoformat()
+            }
+        
+    def put_persistent_dict(self, dict_name):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        json_input = request.json
+        
+        if "key" not in json_input or "value" not in json_input:
+            return {
+                "code"   : 311,
+                "status" : "No key value provided",
+                "ts"     : now.isoformat()
+            }    
+
+        key = json_input['key']
+        value = json_input['value']
+        try:
+            if self.manager.putInPersistentDict(dict_name, key,value):
+                return {
+                    "code"       : 200,
+                    "status"     : "ok",
+                    "ts"         : now.isoformat()
+                }
+            else:
+                return {
+                    "code"   : 312,
+                    "status" : "Error putting key in persistent dict",
+                    "ts"     : now.isoformat()
+                }    
+        except Exception as e:
+            self.logger.info("error putting key in dict %s:%s" % (dict_name,e))
+            return {
+                "code"   : 313,
+                "status" : "Error putting key in persistent dict",
+                "error"  : "%s" % e,
+                "ts"     : now.isoformat()
+            }
+    
+    def get_persistent_dict(self, dict_name, key):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        try:
+            value = self.manager.getFromPersistentDict(dict_name, key)
+            
+            return {
+                "code"     : 200,
+                "status"   : "OK",
+                "key"      : key,
+                "response" : value,
+                "ts"       : now.isoformat()
+           }
+
+        except NoSuchDictionary as e:
+            return {
+                "code"   : 313,
+                "status" : "Dictionary %s does not exists" % dict_name,
+                "ts"     : now.isoformat()
+            }
+        
+        except NoSuchKeyInDictionary as e:
+            return {
+                "code"   : 313,
+                "status" : "key %s does not exists" % key,
+                "ts"     : now.isoformat()
+            }
+        
+        except Exception as e:
+            self.logger.info("error getting key %s in dict %s:%s" % (key, dict_name,e))
+            return {
+                "code"   : 313,
+                "status" : "Error getting key in persistent dict",
+                "error"  : "%s" % e,
+                "ts"     : now.isoformat()
+            }
+
+    def get_persistent_dict_as_json(self, dict_name, key):
+        now = datetime.now(timezone.utc).astimezone(get_localzone())
+        try:
+            value = self.manager.getFromPersistentDict(dict_name, key)
+            
+            json_value = eval(value)
+            
+            return {
+                "code"     : 200,
+                "status"   : "OK",
+                "key"      : key,
+                "response" : json_value,
+                "ts"       : now.isoformat()
+           }
+
+        except NoSuchDictionary as e:
+            return {
+                "code"   : 313,
+                "status" : "Dictionary %s does not exists" % dict_name,
+                "ts"     : now.isoformat()
+            }
+        
+        except NoSuchKeyInDictionary as e:
+            return {
+                "code"   : 313,
+                "status" : "key %s does not exists" % key,
+                "ts"     : now.isoformat()
+            }
+        
+        except Exception as e:
+            self.logger.info("error putting key in dict %s:%s" % (dict_name,e))
+            return {
+                "code"   : 313,
+                "status" : "Error getting key in persistent dict",
                 "error"  : "%s" % e,
                 "ts"     : now.isoformat()
             }

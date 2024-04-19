@@ -1,4 +1,3 @@
-
 import sqlalchemy as sal
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import create_engine, and_

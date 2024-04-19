@@ -56,6 +56,24 @@ class AbstractPipeline:
             return self.kw_args
         return {}
     
+    def addVariable(self, key, value):
+        if not hasattr(self,"vars"):
+            self.vars = {}
+        self.vars[key]=value
+    
+    def getVariable(self, key):
+        if hasattr(self,"vars"):
+            if key in self.vars:
+                return self.vars[key]
+
+        return None
+    
+    def getVariables(self):
+        if hasattr(self,"vars"):
+            return self.vars
+        else:
+            return {}
+    
     @classmethod
     def fromJson(cls, json):
         pipeline = cls()
@@ -70,4 +88,3 @@ class AbstractPipeline:
         pipeline.impl_fn     = base64.b64decode(json["impl_fn"].encode("utf8"))
         
         return pipeline
-        

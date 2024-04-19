@@ -1,4 +1,3 @@
-
 # RemoteProcedureNotificationManager    
 import base64
 import pandas as pd
@@ -122,11 +121,42 @@ class RemoteProcedureNotificationManager(DataBaseBackend,Observable):
                 for subscriber in subscribers:
                     pipeline = self.manager.getActivePipeline(subscriber.pipeline_name)
                     if pipeline is not None:
-                        executor = self.manager.execute(pipeline, rpn_data=data)
+                        executor = None
+                        kw_args = {}
+                        kw_args["rpn_data"]=data
+
+                        if "event" in data:
+                            if data["event"]=="finished":
+                                print("chained trigger for finished execution")
+                                result = dill.loads(base64.b64decode(data["result"]))
+                                if isinstance(result,list) or isinstance(result,tuple):
+                                    executor = self.manager.execute(pipeline, result, **kw_args)
+                                elif isinstance(result,dict):
+                                    kw_args.update(result)
+                                    executor = self.manager.execute(pipeline, **kw_args)
+                                else:
+                                    executor = self.manager.execute(pipeline, result, **kw_args)
+
+                            elif data["event"]=="failed":
+                                print("chained trigger for failed execution")
+                                ex = dill.loads(base64.b64decode(data["result"]))
+                                executor = self.manager.execute(pipeline, ex, **kw_args)
+
+                            else:
+                                # different event
+                                executor = self.manager.execute(pipeline, result, **kw_args)
+                        else:
+                            # normal rpn. rpn_data comes into the kw_args
+
+                            executor = self.manager.execute(pipeline, **kw_args)
+
                         print("rpn triggering %s" % pipeline)
                         print("execution_id: %s" % executor.getExecutionId())
                         notification.addTrigger(subscriber.getPipeline())
                         self.saveObject(notification)
+                    else:
+                        print("no pipeline associated to notification")
+
                 return notification
             else:
                 raise NotificationNotRegistered(label)

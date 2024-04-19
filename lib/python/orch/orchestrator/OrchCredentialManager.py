@@ -1,9 +1,9 @@
 
 
-from bupacl.credentialmanager.CredentialManager import CredentialManager
-from bupacl.credentialmanager.KeyChain import KeyChain
-from bupacl.credentialmanager.EncryptionKey import *
-from bupacl.credentialmanager.Credential import Credential
+from credentialmanager.CredentialManager import CredentialManager
+from credentialmanager.KeyChain import KeyChain
+from credentialmanager.EncryptionKey import *
+from credentialmanager.Credential import Credential
 from ..loggers import BasicLogger
 import jsonpickle
 
@@ -49,7 +49,6 @@ class OrchCredentialManager:
                     self.credential_manager = CredentialManager(self.orchkey, self.db_conn_str)
                 except Exception as e:
                     print("%s, instance could not be generated..."%(e))
-            
             
     def putKey(self, key, passphrase=None):
         """Store public key on keychain"""

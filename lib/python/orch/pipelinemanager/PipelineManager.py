@@ -1,4 +1,3 @@
-
 from flask import request, jsonify
 from multiprocessing import Process, Queue, Manager
 
@@ -13,7 +12,7 @@ from ..base import Observable, ActionListener
 from ..orchestrator import OrchestratorManager
 from . import PipelineCatalog
 from . import ExecutorManager
-from ..exceptions import MultipleActivePipelineRegistered, NoActivePipelineRegistered,PipelineExecutionError, PipelineNotRegistered
+from ..exceptions import MultipleActivePipelineRegistered, NoActivePipelineRegistered, PipelineExecutionError, PipelineNotRegistered
 from .Events import *
 
 class PipelineManager(ActionListener, Observable):
@@ -22,13 +21,14 @@ class PipelineManager(ActionListener, Observable):
         super().__init__()
         
         self.owner            = owner
+        self.smtp_crd         = owner.smtp_crd
         self.catalog          = PipelineCatalog(self,db_conn_str=db_conn_str)
         self.executor_manager = ExecutorManager(self, db_conn_str=db_conn_str)
         self.db_conn_str = db_conn_str
         
         self.executor_manager.addActionListener(self)
         
-    def register(self, name, pipeline_fn, new_version = False):        
+    def register(self, name, pipeline_fn, new_version = False):
         if not new_version:
             if not self.catalog.isRegistered(name):
                 try:
@@ -47,6 +47,10 @@ class PipelineManager(ActionListener, Observable):
                     return new_pipeline
                 except Exception as e:
                     raise e
+            else:
+                if new_version:
+                    raise(PipelineNotRegistered(name))
+                
             # already registered
             
             return self.catalog.get(name=name)
@@ -106,6 +110,14 @@ class PipelineManager(ActionListener, Observable):
         else:
             return None
 
+    def cancel_execution(self, exec_id):
+        executor = self.executor_manager.getExecutorByID(exec_id)
+        
+        if executor is not None:
+            return executor.cancel()
+        else:
+            return False
+        
     def execute(self, pipeline, *pipeline_args, **pipeline_kwargs):
         try:        
             executor = self.executor_manager.create(pipeline)
@@ -134,6 +146,22 @@ class PipelineManager(ActionListener, Observable):
 
         raise PipelineNotRegistered(pipeline_name)
         
+    def get_executions_by(self, where):
+        executions = self.executor_manager.getExecutionsBy(where)
+
+        if len(executions)>0:                
+            return executions
+        else:
+            return []
+    
+    def get_running_executions(self):
+        executions = self.executor_manager.getRunningExecutions()
+
+        if len(executions)>0:
+            return executions
+        else:
+            return []
+    
     def actionPerformed(self, evt):
         # only forward the event to all listeners
         Observable.actionPerformed(self, evt)

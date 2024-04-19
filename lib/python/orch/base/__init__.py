@@ -1,5 +1,5 @@
 name="orch"
-version="1.0"
+version="1.1"
 author="Juan Carlos Maureira"
 
 from .ActionEvent import ActionEvent
@@ -12,7 +12,9 @@ from .AbstractJob import AbstractJob
 from .argument import Argument
 from .AbstractApiService import AbstractApiService
 from .AbstractApiClient import AbstractApiClient
+from .PersistentDict import PersistentDict
 
+from .slurm import SlurmController
 from .slurm import *
 from .LocalJob import *
 
@@ -116,8 +118,7 @@ def asStep(*f, **arg):
                 return submitJob(params, func, *args, **kwargs)
             return wrapper
         return jobFunction
-    
-    
+      
 def asExclusiveStep(*f, **arg):
     def submitJob(job_params, function, *args, **kwargs):
         job_params["job-name"] = function.__name__

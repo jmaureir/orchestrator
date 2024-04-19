@@ -1,8 +1,32 @@
-
 class OrchestratorAccess(object):
+    
+    class ExecutionInfo(object):
+        def __init__(self,notify_execution=False,notification_target=None,notification_show="all",vars={},report=None):
+            self.notify_execution    = notify_execution
+            self.notification_target = notification_target
+            self.notification_show   = notification_show
+            self.vars                = vars
+            self.report              = report
+                
+        def __reduce_ex__(self,protocol):
+            return OrchestratorAccess.ExecutionInfo,(self.notify_execution,self.notification_target,self.notification_show, self.vars, self.report)
+    
     def __init__(self, manager, pipeline):
-        self.manager  = manager
-        self.pipeline = pipeline
+        self.manager          = manager
+        self.pipeline         = pipeline
+        self.exec_info        = OrchestratorAccess.ExecutionInfo()
+
+    def getException(self):
+        if self.pipeline is not None:
+            args = self.pipeline.getArguments()
+            print("args:",args)
+            if len(args)>0:
+                if issubclass(type(args[0]),Exception):
+                    return args[0]
+        else:
+            print("pipeline none in orch access")
+
+        return None
 
     def getCredential(self, label):
         token = self.manager.getToken(label=label, whom=self.pipeline.name)
@@ -79,6 +103,33 @@ class OrchestratorAccess(object):
     
     def getPublicKey(self):
         return self.manager.getPublicKey()
-    
+
+    def getAssignedToken(self, label, whom):
+        return self.manager.getAssignedToken(label, whom)
+
     def checkProcessExpiration(self, process_name):
         return self.manager.checkProcessExpiration(process_name)
+
+    def putInPersistentDict(self, dict_name, key, value):
+        return self.manager.putInPersistentDict(dict_name, key, value)
+    
+    def getFromPersistentDict(self, dict_name, key):
+        return self.manager.getFromPersistentDict(dict_name, key)
+    
+    def notifyExecution(self, target, show="all"):
+        self.exec_info.notify_execution = True
+        self.exec_info.notification_target = target
+        self.exec_info.notification_show = show
+    
+    def createNotifycation(self, label, data={}):
+        return self.manager.createNotification(label,data=data)
+        
+    def addVariable(self,key,value):
+        self.exec_info.vars[key] = value
+        
+    def getVariable(self,key):
+        if key in self.exec_info.vars:
+            return self.exec_info.vars[key]
+        
+    def setReport(self, report):
+        self.exec_info.report = report

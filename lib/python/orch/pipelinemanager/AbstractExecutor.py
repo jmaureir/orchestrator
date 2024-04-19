@@ -6,12 +6,43 @@ import inspect
 
 class AbstractExecutor(object):
     @classmethod
+    
     def fromJson(cls, json):
         obj = cls()
+        
         for k,v in json.items():
             setattr(obj, k, v)
+        
+        obj.handler     = None
+        obj.job_handler = None    
+        
         return obj
-    
+
+    def asJson(self):
+        if self.end_ts is None:
+            end_ts_str = "None"
+        else:
+            end_ts_str = self.end_ts.strftime("%m/%d/%Y %H:%M:%S")
+
+        if self.exec_time is None:
+            exec_time_sec = None
+        else:
+            exec_time_sec = self.exec_time.total_seconds()
+
+        json_obj = {
+            "id"            : self.id,
+            "name"          : self.name,
+            "version"       : self.version,
+            "owner_id"      : self.owner_id,
+            "uuid"          : self.uuid,
+            "creation"      : self.creation.strftime("%m/%d/%Y %H:%M:%S"),
+            "start_ts"      : self.start_ts.strftime("%m/%d/%Y %H:%M:%S"),
+            "end_ts"        : end_ts_str,
+            "exec_time"     : exec_time_sec,
+            "state"         : self.state
+        }
+        return json_obj
+
     def getOutput(self):
         if self.output is not None:
             return base64.b64decode(self.output).decode("utf8")

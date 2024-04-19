@@ -1,4 +1,3 @@
-# 
 # Async decorator
 # with threads and processes
 #
@@ -129,7 +128,10 @@ class ProcessAsyncCall(object):
         if self.proc.is_alive():
             self.proc.join()
             
-        self.proc.terminate()
+        try:
+            self.proc.terminate()
+        except:
+            pass
         
         self.proc.close()
 
@@ -209,7 +211,8 @@ class ThreadAsyncCall(object):
     def __init__(self, fnc, callback = None):
         self.Callable = fnc
         self.Callback = callback
-        self.Result = None
+        self.Result   = None
+        self.Thread   = None
         
     def __call__(self, *args, **kwargs):
         self.Thread = threading.Thread(target = self.run, name = self.Callable.__name__, args = args, kwargs = kwargs)
@@ -286,11 +289,25 @@ def Async(fnc = None, callback = None):
     else:
         return ThreadAsyncMethod(fnc, callback)
 
-class AsyncDummy(object):
+class AsyncDummyMethod(object):
     def __init__(self, function, result):
         self.function = function
         self.result = result
+
+    def __call__(self, *args, **kwargs):
+        self.result = self.function(*args, **kwargs)
+        return self
+
     def wait(self):
         return self.result
+
     def get(self):
         return self.result
+
+def AsyncDummy(fnc = None, callback = None):
+    if fnc == None:
+        def AddAsyncDummyCallback(fnc):
+            return AsyncDummyMethod(fnc, callback)
+        return AddAsyncDummyCallback
+    else:
+        return AsyncDummyMethod(fnc, callback)

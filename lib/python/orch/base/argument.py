@@ -5,8 +5,6 @@ import jsonpickle as jp
 import dill
 
 class Argument:
-
-
     def __init__(self, value, persistent = False, pkl_path = "./tmp"):
         self.value = value
         self.persistent = persistent
@@ -20,6 +18,7 @@ class Argument:
         #pickle.dump(jp.dumps(self.value), )
         with open(self.pkl_file, 'wb') as fd:
             dill.dump(self.value,fd)
+            
         self.value = None
 
     def __del__(self):

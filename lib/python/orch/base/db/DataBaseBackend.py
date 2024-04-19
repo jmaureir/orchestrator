@@ -1,11 +1,15 @@
-
 # DataBaseBackend 
 
+import time
 import sqlalchemy as sal
 from sqlalchemy import create_engine, and_
 from sqlalchemy.sql import func
+from sqlalchemy.sql import text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import scoped_session
+from sqlalchemy.orm import defer
+from sqlalchemy.orm import undefer
+
 
 class DataBaseBackend(object):
         
@@ -50,18 +54,44 @@ class DataBaseBackend(object):
         
         return True
     
-    def getObjects(self, p_obj, *args, **kwargs):
+    def query(self, query):
+        try:
+            statement = text(query)
+            rs = self.session.execute(statement)
+            return rs
+            
+        except Exception as e:
+            print("error in query: %s" % query)
+            raise e
+    
+    def getObjects(self, p_obj, *args, defer_cols=[], **kwargs):
+        
         sess = self.session()
         rs = None
         try:
-            if len(kwargs)>0:
-                rs = sess.query(p_obj, *args).filter_by(**kwargs).all()
+            if len(kwargs)>0 or len(args)>0:
+                if len(defer_cols)>0:
+                    defer_lst = list([defer(x) for x in defer_cols])                    
+                    if len(kwargs)>0:
+                        rs = sess.query(p_obj).filter_by(**kwargs).options(*defer_lst).all()
+                    else:
+                        rs = sess.query(p_obj).filter(*args).options(*defer_lst).all()
+                else:
+                    if len(kwargs)>0:
+                        rs = sess.query(p_obj).filter_by(**kwargs).all()
+                    else:
+                        rs = sess.query(p_obj).filter(*args).all()
             else:
-                rs = sess.query(p_obj, *args).all()
+                if len(defer_cols)>0:
+                    defer_lst = list([defer(x) for x in defer_cols])
+                    rs = sess.query(p_obj).options(*defer_lst).all()
+                else:
+                    rs = sess.query(p_obj).all()
         except Exception as e:
             raise e
         finally:
-            self.session.remove()
+            if len(defer_cols)==0:
+                self.session.remove()
         
         return rs
         
@@ -103,7 +133,19 @@ class DataBaseBackend(object):
         sess = self.session()
         try:
             sess.add(p_obj)
-            sess.commit()
+            e = None
+            done=False
+            for r in range(0,10):
+                try:
+                    sess.commit()
+                    done=True
+                    break
+                except Exception as e:
+                    print("retry commit")
+                    time.sleep(5)
+            if not done:
+                raise RuntimeError("could not save object to database:",e)
+                
         except Exception as e:
             raise e
         finally:    

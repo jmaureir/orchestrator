@@ -1,4 +1,3 @@
-
 import sqlalchemy as sal
 from sqlalchemy import create_engine, and_
 from sqlalchemy.sql import func
@@ -25,7 +24,7 @@ class Pipeline(AbstractPipeline,Base):
     
     catalog    = None
     manager    = None
-    
+
     def setActive(self, state):
         self.active = state
         if self.catalog is not None:

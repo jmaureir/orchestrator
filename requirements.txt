@@ -1,7 +1,16 @@
+python-dotenv
+pycryptodome
+dill
 jsonpickle
+ctparse
 taskit
 promise
 psutil
 tzlocal
 flask 
 pytimeparse
+parsedatetime
+pyarrow
+fastparquet
+sqlalchemy
+pandas

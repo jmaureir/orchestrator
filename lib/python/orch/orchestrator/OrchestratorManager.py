@@ -1,6 +1,9 @@
 from datetime import datetime
 import getpass
 import json
+import os
+import dill
+import base64
 
 from ..base import ActionListener
 from ..scheduler import SchedulerManager, ScheduledEvent
@@ -8,15 +11,22 @@ from ..scheduler.Events import *
 from ..pipelinemanager.Events import *
 from ..pipelinemanager import PipelineManager
 from ..exceptions import MultipleActivePipelineRegistered, NoActivePipelineRegistered
+from ..exceptions import NoSuchKeyInDictionary, NoSuchDictionary
 from .OrchCredentialManager import OrchCredentialManager
 from .RemoteProcedureNotificationManager import RemoteProcedureNotificationManager
+from ..base import PersistentDict
 
 class OrchestratorManager(ActionListener):
-    def __init__(self,db_conn_str="sqlite:///orchestrator.sqlite"):
+    def __init__(self,db_conn_str="sqlite:///orchestrator.sqlite", smtp_crd=None):
         self.owner_id = getpass.getuser()
+        self.smtp_crd = smtp_crd
         self.schm = SchedulerManager(self,db_conn_str=db_conn_str)
         self.pm   = PipelineManager(self,db_conn_str=db_conn_str)
-        self.ocm   = OrchCredentialManager(db_conn_str=db_conn_str)
+
+        #self.ocm  = OrchCredentialManager(db_conn_str=db_conn_str)
+        # use the default vaults for credential manager
+        self.ocm  = OrchCredentialManager(db_conn_str = "sqlite:///./.credentials/credentialVault.sqlite")
+
         self.rpnm = RemoteProcedureNotificationManager(self,db_conn_str=db_conn_str)
         
         self.schm.addActionListener(self)
@@ -24,6 +34,8 @@ class OrchestratorManager(ActionListener):
         self.rpnm.addActionListener(self)
         self.db_conn_str = db_conn_str
 
+        self.persistent_dict_list = {}
+        
     def actionPerformed(self, evt):
         
         if isinstance(evt, ExecutePipeline):
@@ -43,10 +55,27 @@ class OrchestratorManager(ActionListener):
                 print("Error:",e)
         elif isinstance(evt, ExecutionStarted):
             # pipeline manager informing the execution has begun
-            print("execution started")
+            print("execution of pipeline %s started" % evt.pipeline_name)
         elif isinstance(evt, ExecutionFinished):
             # pipeline manager informing the execution has finished
-            print("execution finished")
+            print("execution of pipeline %s finished" % evt.pipeline_name)
+            
+            pipeline_vars   = evt.pipeline.getVariables()
+            execution_state = evt.pipeline.state
+            pipeline_result = evt.pipeline.result.decode("utf-8") 
+           
+            result_value    = dill.loads(base64.b64decode(pipeline_result))
+            event_type = "finished"
+            if issubclass(type(result_value),Exception) or execution_state==5:
+                event_type = "failed"
+            elif execution_state==6:
+                event_type = "cancelled"
+
+            pipe_notif_label = "EP_%s" % evt.pipeline_name
+            pipe_exec_data   = {"event":event_type, "pipeline":evt.pipeline_name, "variables":pipeline_vars,"state": execution_state, "result":pipeline_result}
+            # trigger RPN for allowing chaining
+            self.createNotification(pipe_notif_label,data=pipe_exec_data)
+            
         else:
             print("actionEvent",evt)
             
@@ -95,9 +124,18 @@ class OrchestratorManager(ActionListener):
  
     def getExecutionList(self, name, **kw_args):
         return self.pm.get_execution_list(name, **kw_args)
-    
+
+    def getExecutionsBy(self, where):
+        return self.pm.get_executions_by(where)
+        
+    def getRunningExecutions(self):
+        return self.pm.get_running_executions()
+        
     def getExecution(self, exec_id):
         return self.pm.get_execution(exec_id)
+    
+    def cancelExecution(self, exec_id):
+        return self.pm.cancel_execution(exec_id)
     
     def getLastExecution(self, name):
         exec_list = self.getExecutionList(name)
@@ -140,8 +178,14 @@ class OrchestratorManager(ActionListener):
         except Exception as e:
             raise e
 
-    def unsubscribePipelineNotification(self, subscriber):
-        return self.rpnm.unsubscribrePipeline(subscriber.uuid)
+    def unsubscribePipelineNotification(self, label,pipeline_name):
+
+        subscriptions = self.rpnm.getSubscribedPipelines(label)
+        for s in subscriptions:
+            if s.pipeline_name == pipeline_name:
+                return self.rpnm.unsubscribrePipeline(s.uuid)
+
+        return False
 
     def getSubscribedPipelines(self, label):
         return self.rpnm.getSubscribedPipelines(label)
@@ -239,3 +283,39 @@ class OrchestratorManager(ActionListener):
     
     def checkProcessExpiration(self, process_name):
         return self.ocm.checkProcessExpiration(process_name)
+
+    def putInPersistentDict(self, dict_name, key, value):
+        if dict_name not in self.persistent_dict_list:
+            self.persistent_dict_list[dict_name] = PersistentDict(storage_file="./.persistentdict/%s.dbm" % dict_name)
+
+        try:
+            pers_dict = self.persistent_dict_list[dict_name]
+            pers_dict.put(key,value)
+            return True
+
+        except Exception as e:
+            raise e
+
+        return False
+    
+    def getFromPersistentDict(self, dict_name, key):
+        pdict = None
+        if not os.path.exists("./.persistentdict/%s.dbm" % dict_name):
+            raise NoSuchDictionary(dict_name)
+
+        if dict_name not in self.persistent_dict_list:
+            self.persistent_dict_list[dict_name] = PersistentDict(storage_file="./.persistentdict/%s.dbm" % dict_name)
+
+        pdict = self.persistent_dict_list[dict_name]
+
+        try:
+            if not pdict.exists(key):
+                raise NoSuchKeyInDictionary(key)
+            value = pdict.get(key)
+
+            return value
+        except Exception as e:
+            raise e
+    
+    def notifyExecution(self, target):
+        print("notifyExecution does not work when executing directly the pipeline function")

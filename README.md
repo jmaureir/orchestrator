@@ -1,18 +1,7 @@
 # Orchestrator (orch)
-Juan-Carlos Maureira
+(c) 2017-2024 Juan-Carlos Maureira B
 
-This project started in the project ANID FONDECYT Iniciacion 11170657 and continued
-its development in BUPA Chile.  
+This project was funded by ANID FONDECYT Iniciacion 11170657 grant and has been supported 
+in its development and application by BUPA Chile and Fundacion Arturo Lopez Perez (FALP)
 
-This project is pubic domain and funded by ANID FONDECYT and BUPA Chile
-
-Requirements
-
-jsonpickle
-taskit
-promise
-psutil
-tzlocal
-flask 
-pytimeparse
-
+This software is pubic domain and distributed under GNU GENERAL PUBLIC LICENSE v3.

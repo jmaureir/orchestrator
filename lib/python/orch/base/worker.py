@@ -1,6 +1,4 @@
-# worker need to have full path imports since its deploy in other machines
-import bupacl.orch.base
-from bupacl.orch.base import AVROCodec
+from . import AVROCodec
 import subprocess
 import time
 import os

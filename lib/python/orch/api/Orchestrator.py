@@ -1,4 +1,3 @@
-
 import jsonpickle
 from inspect import isfunction
 import dill
@@ -16,8 +15,8 @@ from ..base import AbstractApiClient
 from ..exceptions import PipelineExecutionError, ImplementationIsNotAFunction, APIResponseError, PipelineSchedulingError
 from ..orchestrator import RemoteProcedureNotificationSubscriber
 
-from bupacl.credentialmanager.Credential import Credential
-from bupacl.credentialmanager.EncryptionKey import EncryptionKey
+from credentialmanager.Credential import Credential
+from credentialmanager.EncryptionKey import EncryptionKey
 
 class Orchestrator(AbstractApiClient):
     def __init__(self, api_url="http://127.0.0.1:8020"):
@@ -27,9 +26,11 @@ class Orchestrator(AbstractApiClient):
         return self.get("/")
     
     def stop(self):
-        self.get("/stop")
-        return True
-
+        # TODO: check permision to stop
+        #self.get("/stop")
+        #return True
+        return False
+    
     def subscribePipelineNotification(self, label, pipeline, *args, **kw_args):
         if isinstance(label,str) and len(label)>0 and isinstance(pipeline,Pipeline):
 
@@ -43,6 +44,25 @@ class Orchestrator(AbstractApiClient):
                 sobj = response["subscription"]
                 obj = RemoteProcedureNotificationSubscriber.fromJson(dill.loads(base64.b64decode(sobj["sobj"].encode("utf8"))))
                 return obj
+            elif response["code"]==501:
+                e = dill.loads(base64.b64decode(response["exception"].encode("urf8")))
+                raise e
+            else:
+                raise APIResponseError("%d:%s" % (response["code"],response["status"]))
+        else:
+            raise RuntimeError("you must provide a valid notification label")
+
+    def unsubscribePipelineNotification(self, label, pipeline, *args, **kw_args):
+        if isinstance(label,str) and len(label)>0 and isinstance(pipeline,Pipeline):
+
+            subscription_data = {
+                "pipeline_name" : pipeline.name
+            }
+
+            response = self.post("/rpn/%s/unsubscribe" % label, json=subscription_data)
+            obj_list = []
+            if response["code"]==204:
+                return True
             elif response["code"]==501:
                 e = dill.loads(base64.b64decode(response["exception"].encode("urf8")))
                 raise e
@@ -185,6 +205,26 @@ class Orchestrator(AbstractApiClient):
         
         raise RuntimeError("you must provide a valid execution_id")
      
+    def cancelExecution(self, exec_id):
+        if exec_id is not None:
+            try:
+                json_response = self.get("/execution/%s/cancel" % exec_id)
+                if json_response["code"] == 202 or json_response["code"] == 311:
+                    s_executor = dill.loads(base64.b64decode(json_response["executor"]["sobj"]))
+                    executor = Execution.fromJson(s_executor)
+                    json_response["executor"] = executor
+                    return json_response
+                else:
+                    return json_response
+
+            except Exception as e:
+                raise e
+
+        raise RuntimeError("you must provide a valid execution_id")
+        
+    def notifyExecution(self, target):
+        print("notifyExecution only works when executing within the orchestrator")
+        
     def getExecutionList(self, name):
         if name is not None or name!="":
             try:
@@ -206,6 +246,46 @@ class Orchestrator(AbstractApiClient):
         
         raise RuntimeError("you must provide a valid execution_id")
     
+    def getRunningExecutions(self):
+        try:
+            response = self.get("/execution/running")
+            obj_list = []
+            if response["code"]==204:
+                for sobj in response["executions"]:
+                    obj = Execution.fromJson(dill.loads(base64.b64decode(sobj["sobj"].encode("utf8"))))
+                    obj_list.append(obj)
+                return obj_list
+            elif response["code"]==401:
+                # no execution found
+                return []
+            else:
+                raise APIResponseError("%d:%s" % (response["code"],response["status"]))
+
+        except Exception as e:
+            raise e
+      
+    def getExecutionsBy(self,where):
+        try:
+            json_data = {
+                "where": where
+            }
+            
+            response = self.post("/execution/getby",json=json_data)
+            obj_list = []
+            if response["code"]==204:
+                for sobj in response["executions"]:
+                    obj = Execution.fromJson(dill.loads(base64.b64decode(sobj["sobj"].encode("utf8"))))
+                    obj_list.append(obj)
+                return obj_list
+            elif response["code"]==401:
+                # no execution found
+                return []
+            else:
+                raise APIResponseError("%d:%s" % (response["code"],response["status"]))
+
+        except Exception as e:
+            raise e    
+
     def getLastExecution(self, name):
         if name is not None:
             try:
@@ -733,5 +813,29 @@ class Orchestrator(AbstractApiClient):
             else:
                 raise APIResponseError("%d:%s" % (response["code"],response["status"]))
 
+        except Exception as e:
+            raise e
+            
+    def putInPersistentDict(self, dict_name, key, value):
+        post_data = {
+            "key"   : key,
+            "value" : value
+        }
+        try:
+            response = self.post("/pd/%s/put" % dict_name, json=post_data)
+            if response["code"]==200:
+                return response
+            else:
+                raise APIResponseError("%d:%s" % (response["code"],response["status"]))
+        except Exception as e:
+            raise e
+
+    def getFromPersistentDict(self, dict_name, key):
+        try:
+            response = self.get("/pd/%s/get/%s" % (dict_name,key))
+            if response["code"]==200:
+                return response
+            else:
+                raise APIResponseError("%d:%s" % (response["code"],response["status"]))
         except Exception as e:
             raise e

@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from dateutil import parser
 
@@ -31,7 +30,10 @@ class SchedulerManager(DataBaseBackend, ActionListener, Observable):
         for sch_evt in active_scheduled_events:
             trigger_time_str = sch_evt.trigger_time.strftime("%H:%M:%S")
             print("scheduling %s" % sch_evt)
-            self.tm.addTimeEvent(sch_evt.uuid,trigger_time_str,sch_evt.recurrency)
+            try:
+                self.tm.addTimeEvent(sch_evt.uuid,trigger_time_str,sch_evt.recurrency)
+            except Exception as e:
+                print(e)
 
     def scheduleAt(self, pipeline, label = None, trigger_time_str=datetime.now().strftime("%H:%M:%S"), recurrency=None, tags=[]):
         

@@ -1,63 +1,108 @@
-
 import time
 from datetime import timedelta
 from datetime import datetime
 from dateutil import parser
 from pytimeparse.timeparse import timeparse
+from dateutil.relativedelta import relativedelta
+
+from ctparse import ctparse
+from ctparse.types import Time as ctTime
+from ctparse.types import Duration as ctDuration
+from ctparse.types import DurationUnit
 
 from ..base import ActionEvent 
 from ..exceptions import EventInThePast
 
 class TimeEvent(ActionEvent):
-    def __init__(self, label, base_trigger_time_str=datetime.now().strftime("%H:%M:%S"), recurrency_str=None):
+
+    def getTime2Trigger(self,when, recurrency=None, reference=datetime.now()):
+        evt_time = when
+        if recurrency is not None:
+            evt_time = "%s %s" % (when, recurrency)
+        
+        ctr = ctparse(evt_time,reference).resolution
+        next_evt_date = None
+        if isinstance(ctr,ctDuration):
+            #print("duration",ctr, ctr.unit)
+            td = None
+            t = 0
+            if ctr.unit == DurationUnit.MONTHS:
+                td = relativedelta(months=ctr.value)
+                t = 1 
+            elif ctr.unit == DurationUnit.DAYS:
+                td = relativedelta(days=ctr.value)
+                t = 1
+            elif ctr.unit == DurationUnit.HOURS:
+                td = relativedelta(hours=ctr.value)
+            elif ctr.unit == DurationUnit.MINUTES:
+                td = relativedelta(minutes=ctr.value)
+            else:
+                print("DurationUnit not handled",ctr.unit)
+
+            ref = parser.parse(when)
+            if t == 0:
+                next_evt_date = reference + td
+            else:
+                if ref > reference:
+                    next_evt_date = ref
+                else:
+                    next_evt_date = ref + td
+
+        elif isinstance(ctr,ctTime):
+            #print("time",ctr)
+            if ctr.hasTime:
+                next_evt_date = datetime(year=ctr.year, month=ctr.month,day=ctr.day, hour=ctr.hour, minute=ctr.minute)
+            else:
+                when_tm = time.strptime(when,"%H:%M")
+                next_evt_date = datetime(year=ctr.year, month=ctr.month,day=ctr.day, hour=when_tm.tm_hour, minute=when_tm.tm_min)
+
+        return next_evt_date
+
+    def __init__(self, label, when=datetime.now(), recurrency_str=None, resolution=1):
         super().__init__()
         
         self.label             = label
-        self.base_trigger_time = parser.parse(base_trigger_time_str)
+        self.when              = when
         
         if recurrency_str is not None and recurrency_str!="":
-            self.recurrency    = timeparse(recurrency_str)  # always returned in seconds
+            self.recurrency    = recurrency_str
         else:
             self.recurrency    = None
     
         self.evt_time          = None
-        
-        self.updateEventTime()
-        
-    def updateEventTime(self):
-        # compute the next event time from now
-        # the base_trigger_time is the base reference to compute the next event time according
-        # to the recurrency from current localtime
-        # if base trigger time is in the past, we compute the next trigger time
-        # if base trigger time is in the future, the next trigger time is the given trigger time
-        
-        now = datetime.now().time()
-        
-        if self.recurrency is None or self.recurrency == 0:
-            if self.base_trigger_time.time() > now:
-                self.evt_time = self.base_trigger_time
-            else:
-                raise EventInThePast(self.label, self.base_trigger_time)
-            
-        trigger_ts              = self.base_trigger_time
-        trigger_time            = trigger_ts.time()
-        td_now                  = timedelta(hours=now.hour, minutes=now.minute, seconds=now.second)
-        td_trg                  = timedelta(hours=trigger_time.hour, minutes=trigger_time.minute, seconds=trigger_time.second)
+        self.resolution        = resolution
 
-        self.evt_time           = None
-        
-        if td_now >= td_trg:
-            td = int((td_now.total_seconds() - td_trg.total_seconds()) / self.recurrency)+1
-            self.evt_time = trigger_ts + timedelta(seconds=(self.recurrency*td))
-        else:
-            self.evt_time = trigger_ts 
-            
-        self.base_trigger_time = self.evt_time
-        
-        print("Time Event updated:",self.evt_time)
-        
-        return True
-    
+        try:
+            self.evt_time          = self.getTime2Trigger(self.when, self.recurrency)
+            print("Event scheduled at",self.evt_time)
+        except Exception as e:
+            print("error computing next event time")
+
+    def updateEventTime(self):
+      
+        print("updating event time")
+        tm = datetime.now()
+        try:
+            next_evt_ts = self.getTime2Trigger(self.when, self.recurrency ,tm)
+
+            print("evt_time      ",self.evt_time)
+            print("next_evt_time ",next_evt_ts)
+
+            if self.evt_time is None:
+                self.evt_time = parser.parse(self.when)
+
+            if next_evt_ts > tm:
+                self.evt_time = next_evt_ts
+                print("Time Event updated:",self.evt_time)
+            else:
+                print("next event time in the past",next_evt_ts, tm)
+
+            return next_evt_ts
+        except Exception as e:
+            print("error computing next event time")
+
+        return None
+
     def isRecurrent(self):
         if self.recurrency is not None:
             return True
@@ -65,12 +110,21 @@ class TimeEvent(ActionEvent):
         
     def getRecurrency(self):
         if self.isRecurrent():
-            return timedelta(seconds=self.recurrency)
+            try:
+                evt_time = "%s %s" % (self.when, self.recurrency)
+                ctr = ctparse(evt_time,datetime.now()).resolution
+                return ctr
+            except Exception as e:
+                return self.recurrency
         return None
         
     def trigger(self, tm):
-        if self.evt_time.hour == tm.hour and self.evt_time.minute == tm.minute and self.evt_time.second == tm.second:
-            return True
+        try:
+            if self.evt_time < tm:
+                return True
+        except Exception as e:
+            print("error determining triggering condition for",self)
+
         return False
         
     def __repr__(self):

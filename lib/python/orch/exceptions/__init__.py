@@ -65,6 +65,10 @@ class EventInThePast(Exception):
     def __init__(self,name, time):
         super(EventInThePast, self).__init__("%s @ %s" % (name,time))        
         
+class EventWithNoRecurrence(Exception):
+    def __init__(self,name):
+        super(EventWithNoRecurrence, self).__init__(name)
+
 class MultipleScheduledEventFound(Exception):
     def __init__(self,uuid):
         super(MultipleScheduledEventFound, self).__init__(uuid) 
@@ -76,3 +80,11 @@ class NotificationNotRegistered(Exception):
 class SubscriberNotRegistered(Exception):
     def __init__(self,label):
         super(SubscriberNotRegistered, self).__init__(label)
+
+class NoSuchKeyInDictionary(Exception):
+    def __init__(self,label):
+        super(NoSuchKeyInDictionary, self).__init__(label)
+
+class NoSuchDictionary(Exception):
+    def __init__(self,label):
+        super(NoSuchDictionary, self).__init__(label)

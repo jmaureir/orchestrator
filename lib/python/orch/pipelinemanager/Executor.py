@@ -11,6 +11,7 @@ import time
 from datetime import date, datetime, timezone
 from tzlocal import get_localzone 
 import traceback
+import re
 
 import sqlalchemy as sal
 from sqlalchemy.ext.declarative import declarative_base
@@ -76,6 +77,13 @@ class Executor(AbstractExecutor, Base, Observable):
         if not self.em.saveObject(self):
             print("error saving executor")
 
+    def __not_persistent_init__(self,em):
+        Observable.__init__(self)
+
+        self.em          = em
+        self.handler     = None
+        self.job_handler = None
+            
     def setLocalJob(self, b):
         self.local_job = b
 
@@ -87,7 +95,11 @@ class Executor(AbstractExecutor, Base, Observable):
     
     def run(self, *args, **kwargs):
         name = self.pipeline.name
-        
+       
+        self.pipeline.setArguments(args)
+        self.pipeline.setKeywordArguments(kwargs)
+        self.pipeline.report = None
+
         orch_access = OrchestratorAccess(self.em.owner.owner, self.pipeline)
         
         pipeline_fn = self.pipeline.getFunction()
@@ -96,7 +108,7 @@ class Executor(AbstractExecutor, Base, Observable):
             'args': args, 
             'kwargs': kwargs
         }
-        
+       
         self.pipeline_args = base64.b64encode(dill.dumps(pipeline_args))
         self.state         = 2  # initialized        
         
@@ -120,31 +132,38 @@ class Executor(AbstractExecutor, Base, Observable):
                 print(*args, file=error)
 
             # trigger execution start event
-            self.actionPerformed(ExecutionStarted())
+            self.actionPerformed(ExecutionStarted(self.pipeline))
             
             start_ts = datetime.now(timezone.utc).astimezone(get_localzone())
             oprint("Pipeline Execution")
-            oprint("pipeline    : %s" % name)
+            oprint("pipeline          : %s" % name)
             oprint("pipeline version  : %d" % self.pipeline.version)
-            oprint("cores       : %d" % self.cores)
-            oprint("start time  : ",start_ts)
-            oprint("arguments   : %s %s" % (str(args), str(kwargs)))
+            oprint("cores             : %d" % self.cores)
+            oprint("start time        : ",start_ts)
+            oprint("arguments         : %s %s" % (str(args), str(kwargs)))
 
             # execute the pipeline as a process in order to wait for the result 
             # or eventually cancel the execution
+            
+            exec_info = orch_access.exec_info
             
             @Async
             def execute_pipeline():
 
                 # execution process which trigger the pipeline as job 
                 # and wait for it to finish
-                
+ 
+                exec_info = orch_access.exec_info
+               
                 try:
-
                     returned_arg = None
+                    
+                    orch_access_manager  = orch_access.manager
+                    orch_access_pipeline = orch_access.pipeline
                     
                     if self.local_job:
                         oprint("executing pipeline as process")
+                        #orch_access.pipeline = None
                         self.job_handler = execute_pipeline_as_local(self.cores, pipeline_fn, orch_access, args, kwargs )
                     else:
                         oprint("executing pipeline as job")
@@ -162,37 +181,77 @@ class Executor(AbstractExecutor, Base, Observable):
                     if not self.em.saveObject(self):
                         eprint("error saving executor")
                     
-                    # wait for the result (the second get is to get the returned argument value)
-                    if self.local_job:
-                        returned_arg = self.job_handler.get().get()
-                    else:
-                        returned_arg = self.job_handler.get()
-                    
-                    print("returned arg:",returned_arg)
+                    try:
+                        # wait for the result (the second get is to get the returned argument value)
+                        if self.local_job:
+                            h = self.job_handler.get()
+                            if h is not None:
+                                returned_arg = h.get()
+                            else:
+                                returned_arg = None
+                        else:
+                            returned_arg = self.job_handler.get()
 
-                    success, result, b64_output, b64_error = returned_arg
+                        #print("returned arg:",returned_arg)
+                    except Exception as e:
+                        print("Exception raised when waiting for job:",e)
+                        
+                    success = False
+                    result = None
+                    b64_output = None
+                    b64_error = None
 
+                    if returned_arg is not None:
+                        success, result, b64_output, b64_error, exec_info = returned_arg
+                        
                     if success:
                         oprint("pipeline execution successfully finished")
                         self.state    = 4  # finished
                     else:
                         oprint("pipeline execution failed")
                         self.state    = 5  # error
-                        
-                    self.pipeline_ret = base64.b64encode(dill.dumps(result))
-                    self.em.active[self.uuid] = self 
                     
-                    self.actionPerformed(ExecutionFinished())
+                    if exec_info is not None:
+                        # update variables and report from orch_access exec_info
+                        self.pipeline.vars     = exec_info.vars
+                        self.pipeline.report   = exec_info.report
+
+                    self.pipeline.state    = self.state
+                    
+                    # get the output
+                    self.pipeline_ret = base64.b64encode(dill.dumps(result))
+                    self.pipeline.result = self.pipeline_ret
+
+                    self.actionPerformed(ExecutionFinished(self.pipeline))
                     
                     end_ts = datetime.now(timezone.utc).astimezone(get_localzone())
                     self.end_ts = end_ts
                     self.exec_time = end_ts - start_ts
     
+                    exec_output = "No captured output"
+                    if b64_output is not None:
+                        exec_output = base64.b64decode(b64_output).decode('utf8')
+                
+                    exec_error = "No captured output"
+                    if b64_error is not None:
+                        exec_error  = base64.b64decode(b64_error).decode('utf8')
+            
+                    exec_output = re.sub("(.*):\/\/(.*):(.*)@(.*)","\\1://*****:******@\\4",exec_output)
+                    exec_error = re.sub("(.*):\/\/(.*):(.*)@(.*)","\\1://*****:******@\\4",exec_error)
+   
+                    if self.pipeline.report is not None:
+                        oprint("=================================================")
+                        oprint("execution report start")
+                        oprint(self.pipeline.report)
+                        oprint("execution report end")
+                        oprint("=================================================")
+    
+                    oprint("=================================================")
                     oprint("execution output start")
-                    oprint(base64.b64decode(b64_output).decode('utf8'))
-                    eprint(base64.b64decode(b64_error).decode('utf8'))
-
+                    oprint(exec_output)
+                    eprint(exec_error)
                     oprint("execution output end")
+                    oprint("=================================================")
 
                     oprint("pipeline return value")
                     oprint(result)
@@ -207,9 +266,14 @@ class Executor(AbstractExecutor, Base, Observable):
 
                     if not self.em.saveObject(self):
                         eprint("error saving executor")
-                    
+
+                    # check for execution notification
+                    if exec_info.notify_execution:
+                        self.em.sendExecutionNotification(self.pipeline, self.uuid, exec_info.notification_target, show=exec_info.notification_show)
+    
                     # remove the executor from active list in the executor manager
-                    del self.em.active[self.uuid]
+                    if self.uuid in self.em.active:
+                        del self.em.active[self.uuid]
                     
                     return result
                 
@@ -217,7 +281,10 @@ class Executor(AbstractExecutor, Base, Observable):
                     self.state    = 5  # error
                     self.error    = "%s" % e
 
-                    print("exception when running the pipeline",e)
+                    print("exception when running the pipeline %s" % name)
+                    print("Exception reported:",e)
+                    print(traceback.format_exc())
+                                        
                     st = io.StringIO()
                     traceback.print_exc(file=st)
                     st.seek(0)
@@ -229,13 +296,21 @@ class Executor(AbstractExecutor, Base, Observable):
                     output.seek(0)
                     error.seek(0)
 
+                    if self.uuid in self.em.active:
+                        del self.em.active[self.uuid]
+                    
+                    if exec_info is None:
+                        exec_info = orch_access.exec_info
+                                            
                     self.output   = base64.b64encode(output.read().encode('utf8'))
                     self.error    = base64.b64encode(error.read().encode('utf8'))
 
                     if not self.em.saveObject(self):
                         print("error saving executor")
 
-                    del self.em.active[self.uuid]
+                    # check for execution notification
+                    if exec_info.notify_execution:
+                        self.em.sendExecutionNotification(self.pipeline, self.uuid, exec_info.notification_target, show=exec_info.notification_show)
                     
                     return e
                 
@@ -246,7 +321,8 @@ class Executor(AbstractExecutor, Base, Observable):
             except Exception as e:
                 self.output   = None
                 self.error    = "%s" % e
-            
+                print(e)
+                
             return self
         else:
             raise ImplementationIsNotAFunction(name)
@@ -255,6 +331,26 @@ class Executor(AbstractExecutor, Base, Observable):
         if self.handler is not None:
             if self.job_handler is not None:
                 self.job_handler.cancel()
+                self.state = 6 # cancelled
+                
+                if self.uuid in self.em.active:
+                    del self.em.active[self.uuid]
+                    
+                if not self.em.saveObject(self):
+                    print("error saving executor when cancelling executing")
+                else:
+                    return True
+        else:
+            self.state = 6 # cancelled
+            if self.uuid in self.em.active:
+                del self.em.active[self.uuid]
+                
+            if not self.em.saveObject(self):
+                print("error saving executor when cancelling executing")
+            else:
+                return True
+        
+        return False
             
     def serialize(self):
         s_output = None

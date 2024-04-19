@@ -44,4 +44,3 @@ class AbstractJob(object):
 
     def __del__(self):
         pass
-
